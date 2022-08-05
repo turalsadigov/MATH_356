@@ -1,0 +1,133 @@
+---
+title: "Data Cleaning exercise - titanic data"
+format: html
+editor: visual
+author: Tural Sadigov
+date: August 4, 2022
+output: github_document
+---
+
+## EDA
+
+In this exercise, we will look at a famous data named titanic, and learn some data cleaning tricks.
+
+First, we load the tidyverse library that we will use.
+
+```{r}
+library(tidyverse) # for data manipulation
+titanic_train <- read_csv('train.csv')
+titanic_test <- read_csv('test.csv')
+```
+
+First thing first, we should look at the data.
+
+```{r}
+titanic_train %>% 
+  print(n = 20)
+dim(titanic_train)
+```
+
+We see many missing values in the Cabin variable already. There are 12 variables with 891 rows. Lets glimpse into the training data further.
+
+```{r}
+dplyr::glimpse(titanic_train)
+```
+
+We see that there are numeric variables and also some categorical ones codes as characters. Survived variable is an indicator, so it should be a factor. PassengerId is the unique identifier and can be remove for further analysis. Pclass coded as numeric but must be categorical since the levels show classes of passengers. Name is self-exploratory, and we can remove it. We can skim the data with little more details.
+
+```{r}
+skimr::skim(titanic_train)
+```
+
+We do have missing data in more than one variable: Cabin, Age and Embarked. Lets look at the 'missingness' map of the training data from Amelia package.
+
+```{r}
+# missingness map
+Amelia::missmap(titanic_train)
+```
+
+Cabin variable is mostly empty, so we could choose to drop it. But since Age is 80% complete, we could impute those missing values. Embarked only has two missing rows, and we could also impute those. Lets remove some variables including Cabin, and make some other variables categorical/factor.
+
+```{r}
+# manipulations
+titanic_train_df <- 
+  titanic_train %>% 
+  select(-c(PassengerId, Name, Ticket, Cabin)) %>% 
+  mutate(Survived = as.factor(Survived), 
+         Pclass = as.factor(Pclass)) %>% 
+  mutate_if(is.character, factor)
+# skimming data
+skimr::skim(titanic_train_df)
+```
+
+Let's start imputing missing values. Fir st, we look at the distribution of Embarked.
+
+```{r}
+# counts of each level
+titanic_train_df %>% 
+  count(Embarked)
+# barplot
+titanic_train_df %>% 
+  ggplot(aes(Embarked)) +
+  geom_bar()
+```
+
+The level with the highest frequency is 'S', and lets impute the missing values with the class that has the highest frequency.
+
+```{r}
+# imputation
+titanic_train_df <-  
+  titanic_train_df %>% 
+  mutate(Embarked = replace(Embarked,is.na(Embarked),'S'))
+# counts of each level after imputation
+titanic_train_df %>% 
+  count(Embarked)
+# barplot
+titanic_train_df %>% 
+  ggplot(aes(Embarked)) +
+  geom_bar()
+```
+
+Investigate Age variable. Look at its distribution for each gender.
+
+```{r}
+# age distribution
+titanic_train_df %>% 
+  ggplot(aes(x = Age)) +
+  geom_histogram(color = 'white', binwidth = 10) +
+  facet_wrap(~Sex)
+```
+
+For the missing 20% of the rows, we could use various types of imputation, but lets go with a 'lazy' imputation for this exercise. Meaning, we will look the median of the ages for non-missing values, and replace all missing ones with this median.
+
+```{r}
+age_median <- 
+  titanic_train_df %>% 
+  summarise(median(Age, na.rm = T))
+age_median
+```
+
+Median age is 28. Now we do 'lazy' imputation. Note that replace function below creates a lisrt instead of a numeric variable, so we also change it back to numeric.
+
+```{r}
+# fill age variable: lazy imputation
+titanic_train_df <-  
+  titanic_train_df %>% 
+  mutate(Age = replace(Age,is.na(Age),age_median)) %>% 
+  mutate(Age = unlist(Age))
+skimr::skim(titanic_train_df)
+```
+
+Here SibSp and Parch are number of siblings and parents of a particular traveler. We could combine all of these into single variable that has all family member travelers including the traveler themselves.
+
+```{r}
+# combine siblings, parents together
+titanic_train_df <- 
+  titanic_train_df %>% 
+  mutate(Travelers = SibSp + Parch + 1) %>% 
+  select(-c(SibSp, Parch))
+# glimpse
+glimpse(titanic_train_df)
+```
+
+If we need to fit any kind of machine learning algorithm, then very same manipulations using only training data statistics need to be applied to the testing data. We will do all of these with meta-package named **`tidymodels`**.
