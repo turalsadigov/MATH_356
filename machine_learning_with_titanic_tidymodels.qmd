@@ -1,0 +1,166 @@
+---
+title: "Machine Learning with titanic data and tidymodels "
+format: html
+editor: visual
+author: Tural Sadigov
+date: August 5, 2022
+output: github_document
+---
+
+## Libraries and data
+
+```{r}
+library(tidyverse) # for data manipulation
+library(tidymodels)
+titanic_train <- read_csv('train.csv')
+titanic_test <- read_csv('test.csv')
+```
+
+## Machine Learning with tidymodels
+
+**`Goal:`** Using various other traveler characteristics, we would like to predict if a traveler survived or not. That means that we would like to create/fit a model that can classify travelers into one of two groups. This is called classification algorithm. Outcome, survived or not, is a categorical variable with two levels. Thus, our model will be a binary classification model. Since we do know if travelers survived or not already, that means that we will be fitting a supervised algorithm where data 'supervises' the model by telling it what happened with a particular traveler.
+
+Here are usual steps that we will be conducting from start to end for every machine learning project.
+
+-   Loading necessary libraries and data. Then, Exploratory Data Analysis (EDA) to understand the data at hand.
+
+-   Splitting data into training and testing using stratified sampling.
+
+-   Then further resampling from the training data to choose a model or model hyperparameters via either cross validation, bootstrapping or just single validation set.
+
+-   Declaring model specifications.
+
+-   Declaring recipes for feature engineering using EDA results.
+
+-   Fitting resamples with various hyperparameters and workflows.
+
+-   Assess the results of these fitting to choose a final model.
+
+-   Fit a final model with the chosen algorithm and hyperparameters to the whole training set and make predictions on the testing data to report generalization accuracy/error.
+
+Lets start. First, we split the data using stratified sampling. Well, this step has been already done for us in the data, so we skip. But we create bootstrap (re)samples for model selection.
+
+```{r}
+library(tidymodels)
+set.seed(2022)
+titanic_folds <- bootstraps(data = titanic_train, 
+                            times = 25)
+titanic_folds
+```
+
+We obtain a new object, a tibble, with list column that has the bootstrap samples and also out of bag (OOB) samples. When sample size is large, out of samples approximately consists of $\frac{1}{e}$ of the sampled data.
+
+```{r}
+exp(-1)
+```
+
+For the first bootstrap sample, there are 328 out of bag samples.
+
+```{r}
+328/891
+```
+
+That is pretty close to the theoretical percentage. Since we have done EDA in another Quarto, we will use that analysis during feature engineering. Next step is to define model specifications. We will use three models: Logistic Regression, Random Forest and Support Vector Machine with radial kernel.
+
+```{r}
+# logistic regression
+titanic_glm_spec <- 
+  logistic_reg() %>% # model
+  set_engine('glm') %>%  # package to use
+  set_mode('classification') # choose one of two: classification vs regresson
+
+titanic_rf_spec <-  
+  rand_forest(trees = 1000) %>% # algorithm speicfic argument:1000 trees
+  set_engine('ranger') %>% 
+  set_mode('classification')
+
+titanic_svm_spec <-  
+  svm_rbf() %>% # rbf - radial based
+  set_engine('kernlab') %>% 
+  set_mode('classification')
+```
+
+One can look into these objects to see model specifications.
+
+```{r}
+titanic_svm_spec
+```
+
+Now we declare recipe which helps us to do feature engineering for training data, and then will automatically apply the same steps to testing data.
+
+```{r}
+# declare recipe
+titanic_recipe <- 
+  recipe(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked, 
+         data = titanic_train) %>% # keep variables we want
+  step_impute_median(Age,Fare) %>% # imputation
+  step_impute_mode(Embarked) %>% # imputation
+  step_mutate_at(Survived, Pclass, Sex, Embarked, fn = factor) %>% # make these factors
+  step_mutate(Travelers = SibSp + Parch + 1) %>% # new variable
+  step_rm(SibSp, Parch) %>% # remove variables
+  step_dummy(all_nominal_predictors()) %>% # create indicator variables
+  step_normalize(all_numeric_predictors()) # normalize numerical variables
+```
+
+We will define workflows that will combine model with the recipe, and fit it all together.
+
+```{r}
+doParallel::registerDoParallel() # resample fitting is embarrasingly parrallel problem
+titanic_glm_wf <- 
+  workflow() %>% 
+  add_recipe(titanic_recipe) %>% 
+  add_model(titanic_glm_spec) %>% 
+  fit_resamples(titanic_folds)
+titanic_glm_wf
+```
+
+Collect metrics (accuracy and area under the receiver characteristic curve) for logistic regression.
+
+```{r}
+collect_metrics(titanic_glm_wf)
+```
+
+We now fit other two models.
+
+```{r}
+# random forest
+doParallel::registerDoParallel()
+titanic_rf_wf <- 
+  workflow() %>% 
+  add_recipe(titanic_recipe) %>% 
+  add_model(titanic_rf_spec) %>% 
+  fit_resamples(titanic_folds)
+# svm
+doParallel::registerDoParallel()
+titanic_svm_wf <- 
+  workflow() %>% 
+  add_recipe(titanic_recipe) %>% 
+  add_model(titanic_svm_spec) %>% 
+  fit_resamples(titanic_folds)
+```
+
+Look at performances on OOB samples for all three models.
+
+```{r}
+collect_metrics(titanic_glm_wf)
+collect_metrics(titanic_rf_wf)
+collect_metrics(titanic_svm_wf)
+```
+
+It seems that Random Forest is the winner with 82% accuracy and ROCAUC of 86.5. We use it as a final fit to the whole training data.
+
+```{r}
+titanic_rf_last_wf <- 
+  workflow() %>% 
+  add_recipe(titanic_recipe) %>% 
+  add_model(titanic_rf_spec)
+final_fit <- 
+  fit(object = titanic_rf_last_wf, 
+      data = titanic_train)
+final_fit %>% 
+  extract_recipe(estimated = T)
+final_fit %>%
+  extract_fit_parsnip()
+```
+
+We will make predictions and more in upcoming Quartos.
